@@ -1,0 +1,45 @@
+name: Solana SBF build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Solana CLI
+        shell: bash
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Show tool versions
+        shell: bash
+        run: |
+          rustc --version
+          cargo --version
+          "$HOME/.local/share/solana/install/active_release/bin/solana" --version
+
+      - name: Run host tests
+        run: cargo test -p kabo-wheel
+
+      - name: Build deployable SBF program
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          cargo build-sbf --manifest-path programs/kabo-wheel/Cargo.toml
+
+      - name: Upload deployable program
+        uses: actions/upload-artifact@v4
+        with:
+          name: kabo-wheel-sbf
+          path: target/deploy/kabo_wheel.so
+          if-no-files-found: error
