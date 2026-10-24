@@ -28,6 +28,18 @@ jobs:
           cargo --version
           "$HOME/.local/share/solana/install/active_release/bin/solana" --version
 
+      - name: Generate disposable Devnet identities
+        id: identities
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          solana-keygen new --no-bip39-passphrase --silent --force -o devnet-payer.json
+          solana-keygen new --no-bip39-passphrase --silent --force -o devnet-program.json
+          PROGRAM_ID="$(solana-keygen pubkey devnet-program.json)"
+          sed -i -E "s/declare_id!\(\"[1-9A-HJ-NP-Za-km-z]+\"\)/declare_id!(\"$PROGRAM_ID\")/" programs/kabo-wheel/src/lib.rs
+          echo "program_id=$PROGRAM_ID" >> "$GITHUB_OUTPUT"
+          echo "Disposable Devnet program: $PROGRAM_ID"
+
       - name: Run host tests
         run: cargo test -p kabo-wheel
 
@@ -36,6 +48,16 @@ jobs:
         run: |
           export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
           cargo build-sbf --manifest-path programs/kabo-wheel/Cargo.toml
+
+      - name: Deploy disposable smoke test to Devnet
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          solana config set --url devnet --keypair devnet-payer.json
+          solana airdrop 5 || solana airdrop 2
+          solana balance
+          solana program deploy --program-id devnet-program.json target/deploy/kabo_wheel.so
+          solana program show "${{ steps.identities.outputs.program_id }}"
 
       - name: Upload deployable program
         uses: actions/upload-artifact@v4
