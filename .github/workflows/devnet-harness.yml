@@ -1,0 +1,78 @@
+name: Devnet end-to-end harness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Solana CLI
+        shell: bash
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Load Devnet payer and create test identity
+        id: identities
+        shell: bash
+        env:
+          DEVNET_PAYER_KEYPAIR: ${{ secrets.DEVNET_PAYER_KEYPAIR }}
+          DEVNET_PROGRAM_KEYPAIR: ${{ secrets.DEVNET_PROGRAM_KEYPAIR }}
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          test -n "$DEVNET_PAYER_KEYPAIR"
+          test -n "$DEVNET_PROGRAM_KEYPAIR"
+          printf '%s' "$DEVNET_PAYER_KEYPAIR" > devnet-payer.json
+          printf '%s' "$DEVNET_PROGRAM_KEYPAIR" > devnet-program.json
+          solana-keygen new --no-bip39-passphrase --silent --force -o devnet-mint.json
+          PROGRAM_ID="$(solana-keygen pubkey devnet-program.json)"
+          ADMIN_ID="$(solana-keygen pubkey devnet-payer.json)"
+          MINT_ID="$(solana-keygen pubkey devnet-mint.json)"
+          sed -i -E "s/declare_id!\(\"[1-9A-HJ-NP-Za-km-z]+\"\)/declare_id!(\"$PROGRAM_ID\")/" programs/kabo-wheel/src/lib.rs
+          sed -i -E "s/const ADMIN_AUTHORITY: Pubkey = pubkey!\(\"[1-9A-HJ-NP-Za-km-z]+\"\)/const ADMIN_AUTHORITY: Pubkey = pubkey!(\"$ADMIN_ID\")/" programs/kabo-wheel/src/lib.rs
+          sed -i -E "s/const WAGER_MINT: Pubkey = pubkey!\(\"[1-9A-HJ-NP-Za-km-z]+\"\)/const WAGER_MINT: Pubkey = pubkey!(\"$MINT_ID\")/" programs/kabo-wheel/src/lib.rs
+          echo "program_id=$PROGRAM_ID" >> "$GITHUB_OUTPUT"
+          echo "mint_id=$MINT_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Run host tests
+        run: cargo test -p kabo-wheel
+
+      - name: Build harness SBF program
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          cargo build-sbf --manifest-path programs/kabo-wheel/Cargo.toml
+
+      - name: Deploy harness to Devnet
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          solana config set --url devnet --keypair devnet-payer.json
+          solana balance
+          solana program deploy --program-id devnet-program.json target/deploy/kabo_wheel.so
+
+      - name: Install smoke-test dependencies
+        run: npm install --no-save @solana/web3.js@1.98.4 @solana/spl-token@0.4.14
+
+      - name: Execute mint, initialize, spin, fulfill, settle and accounting checks
+        env:
+          KABO_PROGRAM_ID: ${{ steps.identities.outputs.program_id }}
+          SOLANA_RPC_URL: https://api.devnet.solana.com
+        run: node scripts/devnet-smoke.mjs
+
+      - name: Upload test receipt and binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kabo-devnet-harness-results
+          path: |
+            devnet-smoke-receipt.json
+            target/deploy/kabo_wheel.so
+          if-no-files-found: warn
