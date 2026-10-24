@@ -233,7 +233,13 @@ const paid = spinInfo.data.readBigUInt64LE(178);
 const burned = spinInfo.data.readBigUInt64LE(186);
 const refunded = spinInfo.data[194] === 1;
 if (!finished || refunded) throw new Error("Spin did not settle normally");
-if (gross !== paid + burned) throw new Error("Settlement accounting identity failed");
+if (gross === 0n) {
+  if (paid !== 0n || burned !== (STAKE * 2_000n) / 10_000n) {
+    throw new Error("Losing-spin burn accounting failed");
+  }
+} else if (gross !== paid + burned) {
+  throw new Error("Winning-spin payout accounting failed");
+}
 
 const playerAfter = (await getAccount(connection, payerAta, "confirmed", TOKEN_2022_PROGRAM_ID)).amount;
 const vaultAfter = (await getAccount(connection, vault, "confirmed", TOKEN_2022_PROGRAM_ID)).amount;
